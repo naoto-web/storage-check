@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>保存容量チェック</title>
+<!--
+  naoto-web.github.io の自作アプリは全部同じ場所あつかい＝localStorage（約5MB）を分け合う。
+  このページは同じ場所に置いてあるので、全アプリの保存分を読める。値の中身は表示しない（鍵が写らないように）＝キー名と大きさだけ。
+  外へは何も送らない。2026-11-27 作成（開発/CLAUDE.md の「スマホ側の保存は3つの決まりで」）
+-->
+<style>
+  body { margin: 0; font-family: -apple-system, "Hiragino Sans", "Noto Sans JP", "Meiryo", sans-serif; color: #1f2328; background: #fff; }
+  main { max-width: 640px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; margin: 4px 0 12px; }
+  .big { font-size: 15px; background: #f5f6f7; border-radius: 12px; padding: 12px 14px; }
+  .big b { font-size: 24px; }
+  .bar { height: 14px; background: #e3e5e8; border-radius: 7px; overflow: hidden; margin: 8px 0 4px; display: flex; }
+  .bar span { display: block; height: 100%; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; font-variant-numeric: tabular-nums; margin-top: 6px; }
+  th, td { border-bottom: 1px solid #e3e5e8; padding: 6px 4px; text-align: left; }
+  td.r, th.r { text-align: right; }
+  h2 { font-size: 16px; margin: 20px 0 4px; }
+  .small { font-size: 12px; color: #6a737d; }
+  details { margin-top: 6px; }
+  summary { cursor: pointer; font-size: 14px; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: middle; }
+  .warn { color: #c62828; font-weight: 700; }
+</style>
+</head>
+<body>
+<main>
+  <h1>📦 保存容量チェック</h1>
+  <div id="sum" class="big">調べています…</div>
+  <h2>アプリごと（localStorage）</h2>
+  <table id="apps"></table>
+  <h2>大きいキー 上位20</h2>
+  <table id="keys"></table>
+  <h2>大きい保存場所（IndexedDB など・参考）</h2>
+  <p id="est" class="small"></p>
+  <p class="small">値の中身は表示していません（鍵が写らないように）。外へは何も送りません。このページのスクショをクロコへ。</p>
+</main>
+<script>
+  // キー名の頭 → アプリ名（2026-11-27 時点のコードから）
+  var APPS = [
+    [/^mt_/, 'まとめ通信'], [/^sn_/, '仕組みノート'], [/^kk_/, '健康管理'], [/^kakeibo/, '家計簿'],
+    [/^mjdrill/, '麻雀ドリル'], [/^gakuya:/, 'OKLスマホアプリ'], [/^riders:/, '選手データベース'],
+    [/^keirin-tenkai/, '展開ボード'], [/^stagekit/, 'OBS配信画面'], [/^cred$/, 'シフトアプリ'],
+    [/^__probe/, '（このページの測定用）']
+  ];
+  var COLORS = ['#1a7f5a', '#2f6fd0', '#e8a33a', '#c62828', '#7b4fc9', '#00838f', '#8a6d3b', '#d81b60', '#546e7a', '#9e9d24', '#5d4037', '#999'];
+  function appOf(k) { for (var i = 0; i < APPS.length; i++) if (APPS[i][0].test(k)) return APPS[i][1]; return 'その他（不明）'; }
+  // localStorage は1文字2バイト（UTF-16）で数える
+  function bytes(k, v) { return (k.length + (v ? v.length : 0)) * 2; }
+  function kb(b) { return (b / 1024).toLocaleString(undefined, { maximumFractionDigits: 1 }) + ' KB'; }
+
+  // あと何バイト入るか：少しずつ書いて失敗したところで止める（書いたものはすぐ消す）
+  function freeSpace() {
+    var lo = 0, hi = 12 * 1024 * 1024, key = '__probe__';
+    try { localStorage.removeItem(key); } catch (e) {}
+    while (hi - lo > 2048) {
+      var mid = Math.floor((lo + hi) / 2), ok = true;
+      try { localStorage.setItem(key, 'x'.repeat(Math.floor(mid / 2))); } catch (e) { ok = false; }
+      try { localStorage.removeItem(key); } catch (e) {}
+      if (ok) lo = mid; else hi = mid;
+    }
+    return lo;
+  }
+
+  var rows = [], total = 0, byApp = {};
+  for (var i = 0; i < localStorage.length; i++) {
+    var k = localStorage.key(i), v = localStorage.getItem(k), b = bytes(k, v);
+    rows.push({ k: k, b: b, app: appOf(k) });
+    total += b;
+    byApp[appOf(k)] = (byApp[appOf(k)] || { b: 0, n: 0 });
+    byApp[appOf(k)].b += b; byApp[appOf(k)].n++;
+  }
+  var free = freeSpace(), cap = total + free;
+  var apps = Object.keys(byApp).sort(function (a, b) { return byApp[b].b - byApp[a].b; });
+  var bar = apps.map(function (a, i) { return '<span style="width:' + (byApp[a].b / cap * 100) + '%;background:' + COLORS[i % COLORS.length] + '"></span>'; }).join('');
+  document.getElementById('sum').innerHTML =
+    '使用中 <b>' + kb(total) + '</b> ／ 空き ' + kb(free) + '（上限およそ ' + kb(cap) + '）' +
+    '<div class="bar">' + bar + '</div>' +
+    (free < 200 * 1024 ? '<span class="warn">ほぼ満杯です（空き200KB未満）</span>' : '空きは十分です');
+  document.getElementById('apps').innerHTML = '<tr><th>アプリ</th><th class="r">キー数</th><th class="r">大きさ</th><th class="r">割合</th></tr>' +
+    apps.map(function (a, i) {
+      return '<tr><td><span class="dot" style="background:' + COLORS[i % COLORS.length] + '"></span>' + a + '</td><td class="r">' + byApp[a].n + '</td><td class="r">' + kb(byApp[a].b) + '</td><td class="r">' + (total ? Math.round(byApp[a].b / total * 100) : 0) + '%</td></tr>';
+    }).join('');
+  rows.sort(function (a, b) { return b.b - a.b; });
+  document.getElementById('keys').innerHTML = '<tr><th>キー名</th><th>アプリ</th><th class="r">大きさ</th></tr>' +
+    rows.slice(0, 20).map(function (r) {
+      var name = r.k.length > 34 ? r.k.slice(0, 34) + '…' : r.k;
+      return '<tr><td>' + name.replace(/[<>&]/g, '') + '</td><td>' + r.app + '</td><td class="r">' + kb(r.b) + '</td></tr>';
+    }).join('');
+  if (navigator.storage && navigator.storage.estimate) {
+    navigator.storage.estimate().then(function (e) {
+      document.getElementById('est').textContent = '使用 ' + kb(e.usage || 0) + ' ／ 上限 ' + kb(e.quota || 0) + '（こちらは余裕がある想定。写し・成績はこちらへ移す）';
+    });
+  }
+</script>
+</body>
+</html>
